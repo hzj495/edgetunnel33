@@ -25,7 +25,7 @@ export const CONFIG = {
 const SUPPORTED_URI_SCHEMES = new Set(['vless', 'trojan']);
 const SUPPORTED_TRANSPORTS = new Set(['ws', 'xhttp']);
 
-// V6.16：Clash 优先使用项目1同款订阅转换后端 + ACL4SSR 配置，
+// V6.17：Clash 优先使用项目1同款订阅转换后端 + ACL4SSR 配置，
 // 从而继承项目1的代理组与分流；转换器异常时仍回退到本地标准 YAML。
 const DEFAULT_SUBAPI = 'https://SubApi.CmliUsssS.Net';
 const SUBCONFIG = 'https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/ACL4SSR_Online_Mini_MultiMode.ini';
@@ -209,7 +209,7 @@ async function handleMergedSubscription(request, currentUrl, env = {}, expiry = 
 
   const target = determineSubscriptionTarget(request, currentUrl);
   try {
-    console.log('[V6.16 subscription-detect]', JSON.stringify({
+    console.log('[V6.17 subscription-detect]', JSON.stringify({
       ua: String(request.headers.get('User-Agent') || '').slice(0, 240),
       accept: String(request.headers.get('Accept') || '').slice(0, 160),
       secFetchMode: String(request.headers.get('Sec-Fetch-Mode') || ''),
@@ -242,7 +242,7 @@ async function handleMergedSubscription(request, currentUrl, env = {}, expiry = 
     'X-Central-ADD-Count': String(addGenerated),
     'X-Central-Detected-Target': target,
     'X-Central-Route-Mode': 'subscription',
-    'X-Central-Version': 'V6.16',
+    'X-Central-Version': 'V6.17',
   };
   if (failures.length) {
     headers['X-Central-Warnings'] = encodeURIComponent(failures.join(' | ')).slice(0, 1400);
@@ -257,7 +257,7 @@ async function handleMergedSubscription(request, currentUrl, env = {}, expiry = 
     headers['Content-Disposition'] = `attachment; filename=${asciiSubscriptionName}; filename*=utf-8''${encodeURIComponent(subscriptionName)}`;
     headers['Cache-Control'] = 'no-store';
     headers['X-Central-Clash-Transport'] = formatted.engine === 'project1-subconverter' ? 'project1-acl4ssr' : 'standard-yaml-fallback';
-    headers['X-Central-Version'] = 'V6.16';
+    headers['X-Central-Version'] = 'V6.17';
 
     const clashText = String(body || '');
     const hasProxies = /(^|\n)proxies\s*:/m.test(clashText);
@@ -268,7 +268,7 @@ async function handleMergedSubscription(request, currentUrl, env = {}, expiry = 
     headers['X-Central-Clash-Node-Count'] = String(clashNodeCount);
     headers['X-Central-Clash-YAML'] = (hasProxies && hasProxyGroups && hasRules) ? 'true' : 'false';
     try {
-      console.log('[V6.16 clash-response]', JSON.stringify({
+      console.log('[V6.17 clash-response]', JSON.stringify({
         status: formatted.status || 200,
         bytes: new TextEncoder().encode(clashText).byteLength,
         nodeCount: clashNodeCount,
@@ -336,7 +336,7 @@ function determineSubscriptionTarget(request, currentUrl) {
 async function formatMergedSubscriptionAdaptive(nodes, target, currentUrl, request, env = {}) {
   const normalized = String(target || 'base64').toLowerCase();
 
-  // V6.16：Clash 优先走项目1相同的 SubAPI + ACL4SSR_Online_Mini_MultiMode.ini，
+  // V6.17：Clash 优先走项目1相同的 SubAPI + ACL4SSR_Online_Mini_MultiMode.ini，
   // 这样代理组、自动选择、故障转移、负载均衡以及分流规则都与项目1同源。
   // 若外部转换器异常，则回退 V6.14 已验证可导入的本地标准 YAML。
   if (normalized === 'clash') {
@@ -582,7 +582,7 @@ async function handleConvertTest(request, env = {}, expiry = getExpiryState(env.
   }
 
   const result = {
-    version: 'V6.16',
+    version: 'V6.17',
     mergedSource: {
       ok: mergedStatus === 200 && nodes.length > 0,
       httpStatus: mergedStatus,
@@ -613,7 +613,7 @@ async function handleConvertTest(request, env = {}, expiry = getExpiryState(env.
   }
 
   const esc = value => String(value ?? '').replace(/[&<>\"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[ch]));
-  const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>订阅转换诊断</title><style>body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;background:#f4f7f9;margin:0;color:#253047}.wrap{max-width:850px;margin:32px auto;padding:0 16px}.card{background:#fff;border-radius:16px;padding:22px;margin:14px 0;box-shadow:0 4px 14px #00000012}.ok{color:#079455}.bad{color:#d92d20}.muted{color:#667085}.row{display:flex;justify-content:space-between;gap:18px;border-bottom:1px solid #eef1f5;padding:11px 0}.row:last-child{border-bottom:0}code{word-break:break-all}</style></head><body><div class="wrap"><div class="card"><h2>中控订阅转换诊断 · V6.16</h2><p class="muted">V6.16 的 Clash 优先使用项目1同款 ACL4SSR 转换配置，继承项目1代理组与分流；转换失败时回退本地标准 YAML。</p></div><div class="card"><h3>合并源</h3><div class="row"><span>HTTP</span><b>${mergedStatus}</b></div><div class="row"><span>节点数</span><b>${nodes.length}</b></div><div class="row"><span>状态</span><b class="${result.mergedSource.ok?'ok':'bad'}">${result.mergedSource.ok?'正常':'异常'}</b></div></div><div class="card"><h3>外部 SubAPI</h3><div class="row"><span>地址</span><code>${esc(converterBase || '未启用')}</code></div><div class="row"><span>HTTP</span><b>${converterStatus || '-'}</b></div><div class="row"><span>状态</span><b class="${converterOk?'ok':'bad'}">${esc(converterMessage)}</b></div></div><div class="card"><h3>本地 Clash 标准 YAML 输出</h3><div class="row"><span>状态</span><b class="${localOk?'ok':'bad'}">${localOk?'可用':'异常'}</b></div><div class="row"><span>proxies / groups / rules</span><b>${result.localClashFallback.containsProxies?'✓':'✗'} / ${result.localClashFallback.containsProxyGroups?'✓':'✗'} / ${result.localClashFallback.containsRules?'✓':'✗'}</b></div><div class="row"><span>YAML结构 / FINAL分流 / encryption / XHTTP</span><b>${localSemantic.yamlLike?'✓':'✗'} / ${localSemantic.matchRuleOk?'✓':'✗'} / ${localSemantic.vlessEncryptionAbsent?'✓':'✗'} / ${localSemantic.wsOnlyCompat?'✓':'✗'}</b></div></div></div></body></html>`;
+  const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>订阅转换诊断</title><style>body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;background:#f4f7f9;margin:0;color:#253047}.wrap{max-width:850px;margin:32px auto;padding:0 16px}.card{background:#fff;border-radius:16px;padding:22px;margin:14px 0;box-shadow:0 4px 14px #00000012}.ok{color:#079455}.bad{color:#d92d20}.muted{color:#667085}.row{display:flex;justify-content:space-between;gap:18px;border-bottom:1px solid #eef1f5;padding:11px 0}.row:last-child{border-bottom:0}code{word-break:break-all}</style></head><body><div class="wrap"><div class="card"><h2>中控订阅转换诊断 · V6.17</h2><p class="muted">V6.16 的 Clash 优先使用项目1同款 ACL4SSR 转换配置，继承项目1代理组与分流；转换失败时回退本地标准 YAML。</p></div><div class="card"><h3>合并源</h3><div class="row"><span>HTTP</span><b>${mergedStatus}</b></div><div class="row"><span>节点数</span><b>${nodes.length}</b></div><div class="row"><span>状态</span><b class="${result.mergedSource.ok?'ok':'bad'}">${result.mergedSource.ok?'正常':'异常'}</b></div></div><div class="card"><h3>外部 SubAPI</h3><div class="row"><span>地址</span><code>${esc(converterBase || '未启用')}</code></div><div class="row"><span>HTTP</span><b>${converterStatus || '-'}</b></div><div class="row"><span>状态</span><b class="${converterOk?'ok':'bad'}">${esc(converterMessage)}</b></div></div><div class="card"><h3>本地 Clash 标准 YAML 输出</h3><div class="row"><span>状态</span><b class="${localOk?'ok':'bad'}">${localOk?'可用':'异常'}</b></div><div class="row"><span>proxies / groups / rules</span><b>${result.localClashFallback.containsProxies?'✓':'✗'} / ${result.localClashFallback.containsProxyGroups?'✓':'✗'} / ${result.localClashFallback.containsRules?'✓':'✗'}</b></div><div class="row"><span>YAML结构 / FINAL分流 / encryption / XHTTP</span><b>${localSemantic.yamlLike?'✓':'✗'} / ${localSemantic.matchRuleOk?'✓':'✗'} / ${localSemantic.vlessEncryptionAbsent?'✓':'✗'} / ${localSemantic.wsOnlyCompat?'✓':'✗'}</b></div></div></div></body></html>`;
   return new Response(html, { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } });
 }
 
@@ -775,7 +775,7 @@ function buildClashJsonProfile(nodes) {
 }
 
 function buildClashYaml(nodes) {
-  // V6.16 本地 Clash 输出直接内置项目1同款 ACL4SSR Mini MultiMode 代理组与分流。
+  // V6.17 本地 Clash 输出直接内置项目1同款 ACL4SSR Mini MultiMode 代理组与分流。
   // 这样即使外部 SubAPI 不可用，也不会退回只有 PROXY + MATCH 的简化配置。
   // XHTTP 在旧内核兼容性差，Clash 兼容订阅仍只输出 WS；Base64/其它客户端保持原始节点。
   const parsed = uniqueParsedNodes(nodes).filter(p => p.network === 'ws');
@@ -1137,17 +1137,22 @@ async function rewriteUriNode(node, source, centralHost, env = {}) {
     a: originalEndpoint,
   }, env);
 
-  // V6.3：保留源项目节点原始 server:port。
-  // 只把 Host / SNI / Path 改为中控，使节点地址与源订阅保持一致，
-  // 同时实际 WebSocket 路由仍必须经过中控 /relay/...。
-  // originalEndpoint 已进入 Relay 签名 payload，用于保持节点身份唯一。
+  // V6.17：源节点进入中控 Relay 时，客户端连接入口必须明确指向当前中控 Worker。
+  // 旧版保留源节点原始 server:port，仅改 Host/SNI/Path；这要求原 server 恰好也是
+  // 能承载 centralHost 的 Cloudflare 边缘入口，因此会出现“部分项目能用、部分项目无网络”。
+  // 原始 server:port 已写入 relayToken 的 a 字段用于区分节点，所以这里改成 centralHost
+  // 不会导致不同源节点被错误合并；ADD 仍会在 cloneAddNode() 中覆盖为用户指定优选入口。
+  const relayPort = originalSecurity === 'none' ? '80' : '443';
+  u.hostname = centralHost;
+  u.port = relayPort;
 
   if (originalSecurity === 'none') {
     u.searchParams.set('security', 'none');
+    u.searchParams.delete('sni');
   } else {
     u.searchParams.set('security', 'tls');
+    u.searchParams.set('sni', centralHost);
   }
-  u.searchParams.set('sni', centralHost);
   u.searchParams.set('host', centralHost);
   u.searchParams.set('path', `/relay/${relayToken}`);
   u.searchParams.delete('ech');
@@ -1179,9 +1184,13 @@ async function rewriteVmessNode(node, source, centralHost, env = {}) {
     a: originalEndpoint,
   }, env);
 
-  // V6.3：VMess 同样保留原始 add / port / tls，仅改中控路由字段。
+  // V6.17：VMess 与 VLESS/Trojan 一样，客户端必须先明确连接当前中控 Worker，
+  // 再由 /relay/ 转发到源项目，不能继续保留源节点原始 add/port 作为客户端入口。
+  const relayTls = String(obj.tls || '').toLowerCase() === 'tls';
+  obj.add = centralHost;
+  obj.port = relayTls ? '443' : '80';
   obj.host = centralHost;
-  obj.sni = centralHost;
+  obj.sni = relayTls ? centralHost : '';
   obj.path = `/relay/${relayToken}`;
   if (obj.ech) delete obj.ech;
   return `vmess://${utf8ToBase64(JSON.stringify(obj))}`;
