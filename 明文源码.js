@@ -5,18 +5,18 @@ export const CONFIG = {
     {
       name: '项目1',
       type: 'code1',
-      url: '', // 例如：https://a.example.com/你的UUID
+      url: '', 
       enabled: true,
     },
     {
       name: '项目2',
       type: 'code2',
-      url: 'https://css.junkayk.com/1c6a16fc-a078-4aed-a464-b41e6e4e7851', // 例如：https://b.example.com/你的UUID
+      url: 'https://css.junkayk.com/1c6a16fc-a078-4aed-a464-b41e6e4e7851', 
       enabled: true,
     },
   ],
 
-  // Clash Verge / Mihomo 中显示的订阅名称，直接在这里修改即可。
+
   SUBSCRIPTION_NAME: 'kaa',
 
   FETCH_TIMEOUT: 12000,
@@ -25,8 +25,7 @@ export const CONFIG = {
 const SUPPORTED_URI_SCHEMES = new Set(['vless', 'trojan']);
 const SUPPORTED_TRANSPORTS = new Set(['ws', 'xhttp']);
 
-// V6.17：Clash 优先使用项目1同款订阅转换后端 + ACL4SSR 配置，
-// 从而继承项目1的代理组与分流；转换器异常时仍回退到本地标准 YAML。
+
 const DEFAULT_SUBAPI = 'https://SubApi.CmliUsssS.Net';
 const SUBCONFIG = 'https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/ACL4SSR_Online_Mini_MultiMode.ini';
 const SUBPROTOCOL = 'https';
@@ -46,13 +45,11 @@ export default {
         });
       }
 
-      // EXPIRY_DATE 对 H5、订阅和已经下发的 Relay 节点同时生效。
       const expiry = getExpiryState(env.EXPIRY_DATE);
       if (!expiry.valid) {
         return text(expiry.message, 403, { 'Cache-Control': 'no-store' });
       }
 
-      // 所有节点实际使用时都会访问 /relay/...，因此到期后旧节点也会在这里被拦截。
       if (path.startsWith('/relay/')) {
         return handleRelay(request, url, env);
       }
@@ -63,8 +60,6 @@ export default {
       const mergeSourcePath = `${keyPath}/merge-source`;
       const convertTestPath = `${keyPath}/convert-test`;
 
-      // V6.5：专供项目1原版 SubAPI 读取的内部 Base64 合并源。
-      // 与 cs(4).txt 的 /fakeUserID/merge-code2 作用一致，避免转换器再次触发 Clash/SingBox/Loon 格式分支。
       if (path === mergeSourcePath) {
         const internalUrl = new URL(request.url);
         internalUrl.pathname = keyPath;
@@ -88,9 +83,7 @@ export default {
       }
 
       if (path === keyPath) {
-        // 自 V6.14 起：不能只靠 Mozilla UA 判断 H5。
-        // 一些定制 Clash 前端/重试下载会使用 Chromium/Mozilla UA，但它们不是页面导航。
-        // 只有真正的浏览器 document/navigate（或明确 Accept: text/html）才显示 H5；其余按订阅处理。
+
         if (shouldShowH5(request, url)) {
           return h5Page(request, env, expiry);
         }
@@ -135,8 +128,7 @@ async function handleMergedSubscription(request, currentUrl, env = {}, expiry = 
 
   const fetched = await Promise.all(sources.map(source => fetchOneSource(source, request)));
   const centralHost = currentUrl.hostname;
-  // 先完成两个源项目的 Relay 重写，但暂不写入最终订阅。
-  // 这样 ADD 可以使用其中一条 Relay 作为模板，并且最终顺序能够固定为：ADD -> 项目1 -> 项目2。
+
   const sourceOutput = [];
   const sourceSeen = new Set();
   const failures = [];
@@ -209,7 +201,7 @@ async function handleMergedSubscription(request, currentUrl, env = {}, expiry = 
 
   const target = determineSubscriptionTarget(request, currentUrl);
   try {
-    console.log('[V6.17 subscription-detect]', JSON.stringify({
+    console.log('[V6.18 subscription-detect]', JSON.stringify({
       ua: String(request.headers.get('User-Agent') || '').slice(0, 240),
       accept: String(request.headers.get('Accept') || '').slice(0, 160),
       secFetchMode: String(request.headers.get('Sec-Fetch-Mode') || ''),
@@ -242,7 +234,7 @@ async function handleMergedSubscription(request, currentUrl, env = {}, expiry = 
     'X-Central-ADD-Count': String(addGenerated),
     'X-Central-Detected-Target': target,
     'X-Central-Route-Mode': 'subscription',
-    'X-Central-Version': 'V6.17',
+    'X-Central-Version': 'V6.19',
   };
   if (failures.length) {
     headers['X-Central-Warnings'] = encodeURIComponent(failures.join(' | ')).slice(0, 1400);
@@ -251,13 +243,14 @@ async function handleMergedSubscription(request, currentUrl, env = {}, expiry = 
   if (formatted.converterStatus !== undefined) headers['X-Central-Subconverter-Status'] = String(formatted.converterStatus);
   if (formatted.converterError) headers['X-Central-Subconverter-Error'] = encodeURIComponent(formatted.converterError).slice(0, 700);
 
-  // V6.16 Clash：优先返回项目1同款 ACL4SSR 配置，并使用可自定义订阅名称。
+  // V6.19 Clash：项目1同款 ACL4SSR 配置 + OpenClash DNS/指纹兼容处理。
   if (target === 'clash') {
     headers['Content-Type'] = formatted.contentType || 'text/yaml; charset=utf-8';
     headers['Content-Disposition'] = `attachment; filename=${asciiSubscriptionName}; filename*=utf-8''${encodeURIComponent(subscriptionName)}`;
     headers['Cache-Control'] = 'no-store';
     headers['X-Central-Clash-Transport'] = formatted.engine === 'project1-subconverter' ? 'project1-acl4ssr' : 'standard-yaml-fallback';
-    headers['X-Central-Version'] = 'V6.17';
+    headers['X-Central-Version'] = 'V6.19';
+    headers['X-Central-OpenClash-Compat'] = 'dns-bootstrap+chrome-fingerprint';
 
     const clashText = String(body || '');
     const hasProxies = /(^|\n)proxies\s*:/m.test(clashText);
@@ -268,7 +261,7 @@ async function handleMergedSubscription(request, currentUrl, env = {}, expiry = 
     headers['X-Central-Clash-Node-Count'] = String(clashNodeCount);
     headers['X-Central-Clash-YAML'] = (hasProxies && hasProxyGroups && hasRules) ? 'true' : 'false';
     try {
-      console.log('[V6.17 clash-response]', JSON.stringify({
+      console.log('[V6.19 clash-response]', JSON.stringify({
         status: formatted.status || 200,
         bytes: new TextEncoder().encode(clashText).byteLength,
         nodeCount: clashNodeCount,
@@ -336,12 +329,18 @@ function determineSubscriptionTarget(request, currentUrl) {
 async function formatMergedSubscriptionAdaptive(nodes, target, currentUrl, request, env = {}) {
   const normalized = String(target || 'base64').toLowerCase();
 
-  // V6.17：Clash 优先走项目1相同的 SubAPI + ACL4SSR_Online_Mini_MultiMode.ini，
+  // V6.19：Clash 优先走项目1相同的 SubAPI + ACL4SSR_Online_Mini_MultiMode.ini，
   // 这样代理组、自动选择、故障转移、负载均衡以及分流规则都与项目1同源。
   // 若外部转换器异常，则回退 V6.14 已验证可导入的本地标准 YAML。
   if (normalized === 'clash') {
     const remote = await formatViaProject1Subconverter('clash', currentUrl, request, env);
-    if (remote.status === 200) return remote;
+    if (remote.status === 200) {
+      return {
+        ...remote,
+        body: normalizeClashForOpenClash(remote.body),
+        engine: 'project1-subconverter-openclash-v619',
+      };
+    }
     return {
       body: buildClashYaml(nodes),
       contentType: 'text/yaml; charset=utf-8',
@@ -393,10 +392,14 @@ function buildProject1ConverterUrl(target, currentUrl, request, env = {}) {
   sourceUrl.search = '';
 
   const original = new URL(request.url);
+  const lockedIsp = normalizeIsp(original.searchParams.get('isp')) || detectIspFromCf(request?.cf || {});
   for (const [key, value] of original.searchParams.entries()) {
     if (['clash', 'singbox', 'sb', 'loon', 'b64', 'base64', 'raw', 'plain', 'target'].includes(key.toLowerCase())) continue;
     sourceUrl.searchParams.append(key, value);
   }
+  // V6.19：Clash/SingBox/Loon 经外部 SubAPI 二次回源时，继续沿用客户端首次请求识别出的运营商。
+  // 否则 /merge-source 会看到 SubAPI 服务器自己的 ASN，代码2 的移动/联通/电信节点会被错误筛掉。
+  if (lockedIsp) sourceUrl.searchParams.set('isp', lockedIsp);
 
   const converter = new URL(`${base.replace(/\/$/, '')}/sub`);
   converter.searchParams.set('target', target === 'singbox' ? 'singbox' : target);
@@ -582,7 +585,7 @@ async function handleConvertTest(request, env = {}, expiry = getExpiryState(env.
   }
 
   const result = {
-    version: 'V6.17',
+    version: 'V6.18',
     mergedSource: {
       ok: mergedStatus === 200 && nodes.length > 0,
       httpStatus: mergedStatus,
@@ -613,7 +616,7 @@ async function handleConvertTest(request, env = {}, expiry = getExpiryState(env.
   }
 
   const esc = value => String(value ?? '').replace(/[&<>\"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[ch]));
-  const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>订阅转换诊断</title><style>body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;background:#f4f7f9;margin:0;color:#253047}.wrap{max-width:850px;margin:32px auto;padding:0 16px}.card{background:#fff;border-radius:16px;padding:22px;margin:14px 0;box-shadow:0 4px 14px #00000012}.ok{color:#079455}.bad{color:#d92d20}.muted{color:#667085}.row{display:flex;justify-content:space-between;gap:18px;border-bottom:1px solid #eef1f5;padding:11px 0}.row:last-child{border-bottom:0}code{word-break:break-all}</style></head><body><div class="wrap"><div class="card"><h2>中控订阅转换诊断 · V6.17</h2><p class="muted">V6.16 的 Clash 优先使用项目1同款 ACL4SSR 转换配置，继承项目1代理组与分流；转换失败时回退本地标准 YAML。</p></div><div class="card"><h3>合并源</h3><div class="row"><span>HTTP</span><b>${mergedStatus}</b></div><div class="row"><span>节点数</span><b>${nodes.length}</b></div><div class="row"><span>状态</span><b class="${result.mergedSource.ok?'ok':'bad'}">${result.mergedSource.ok?'正常':'异常'}</b></div></div><div class="card"><h3>外部 SubAPI</h3><div class="row"><span>地址</span><code>${esc(converterBase || '未启用')}</code></div><div class="row"><span>HTTP</span><b>${converterStatus || '-'}</b></div><div class="row"><span>状态</span><b class="${converterOk?'ok':'bad'}">${esc(converterMessage)}</b></div></div><div class="card"><h3>本地 Clash 标准 YAML 输出</h3><div class="row"><span>状态</span><b class="${localOk?'ok':'bad'}">${localOk?'可用':'异常'}</b></div><div class="row"><span>proxies / groups / rules</span><b>${result.localClashFallback.containsProxies?'✓':'✗'} / ${result.localClashFallback.containsProxyGroups?'✓':'✗'} / ${result.localClashFallback.containsRules?'✓':'✗'}</b></div><div class="row"><span>YAML结构 / FINAL分流 / encryption / XHTTP</span><b>${localSemantic.yamlLike?'✓':'✗'} / ${localSemantic.matchRuleOk?'✓':'✗'} / ${localSemantic.vlessEncryptionAbsent?'✓':'✗'} / ${localSemantic.wsOnlyCompat?'✓':'✗'}</b></div></div></div></body></html>`;
+  const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>订阅转换诊断</title><style>body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;background:#f4f7f9;margin:0;color:#253047}.wrap{max-width:850px;margin:32px auto;padding:0 16px}.card{background:#fff;border-radius:16px;padding:22px;margin:14px 0;box-shadow:0 4px 14px #00000012}.ok{color:#079455}.bad{color:#d92d20}.muted{color:#667085}.row{display:flex;justify-content:space-between;gap:18px;border-bottom:1px solid #eef1f5;padding:11px 0}.row:last-child{border-bottom:0}code{word-break:break-all}</style></head><body><div class="wrap"><div class="card"><h2>中控订阅转换诊断 · V6.19</h2><p class="muted">V6.19 的 Clash 保留项目1 ACL4SSR 代理组/分流，并统一补充 OpenClash 节点域名解析 DNS 与 chrome TLS 指纹。</p></div><div class="card"><h3>合并源</h3><div class="row"><span>HTTP</span><b>${mergedStatus}</b></div><div class="row"><span>节点数</span><b>${nodes.length}</b></div><div class="row"><span>状态</span><b class="${result.mergedSource.ok?'ok':'bad'}">${result.mergedSource.ok?'正常':'异常'}</b></div></div><div class="card"><h3>外部 SubAPI</h3><div class="row"><span>地址</span><code>${esc(converterBase || '未启用')}</code></div><div class="row"><span>HTTP</span><b>${converterStatus || '-'}</b></div><div class="row"><span>状态</span><b class="${converterOk?'ok':'bad'}">${esc(converterMessage)}</b></div></div><div class="card"><h3>本地 Clash 标准 YAML 输出</h3><div class="row"><span>状态</span><b class="${localOk?'ok':'bad'}">${localOk?'可用':'异常'}</b></div><div class="row"><span>proxies / groups / rules</span><b>${result.localClashFallback.containsProxies?'✓':'✗'} / ${result.localClashFallback.containsProxyGroups?'✓':'✗'} / ${result.localClashFallback.containsRules?'✓':'✗'}</b></div><div class="row"><span>YAML结构 / FINAL分流 / encryption / XHTTP</span><b>${localSemantic.yamlLike?'✓':'✗'} / ${localSemantic.matchRuleOk?'✓':'✗'} / ${localSemantic.vlessEncryptionAbsent?'✓':'✗'} / ${localSemantic.wsOnlyCompat?'✓':'✗'}</b></div></div></div></body></html>`;
   return new Response(html, { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } });
 }
 
@@ -715,6 +718,40 @@ function uniqueParsedNodes(nodes) {
   return parsed;
 }
 
+// V6.19 OpenClash 兼容层：
+// 1) 节点 server 使用中控域名时，给 Mihomo/OpenClash 一个不依赖代理本身的 DNS 启动解析器，避免 bootstrap 死循环。
+// 2) 某些源订阅会带 fp=randomized；Mihomo/OpenClash 使用 chrome 指纹兼容性更稳定。
+// 该处理同时作用于外部 SubAPI 返回的 Clash YAML 和本地回退 YAML。
+function normalizeClashForOpenClash(input) {
+  let yaml = String(input || '').replace(/\r\n/g, '\n').trimStart();
+  if (!yaml) return yaml;
+
+  // 统一 TLS/uTLS 指纹，兼容源节点中的 randomized/random 等写法。
+  yaml = yaml.replace(/^(\s*client-fingerprint\s*:\s*).*$/gmi, '$1chrome');
+
+  const dnsResolverLines = [
+    '  proxy-server-nameserver:',
+    '    - 223.5.5.5',
+    '    - 119.29.29.29',
+  ].join('\n');
+
+  if (/^dns\s*:\s*$/m.test(yaml)) {
+    if (!/^\s{2}proxy-server-nameserver\s*:/m.test(yaml)) {
+      yaml = yaml.replace(/^dns\s*:\s*$/m, match => `${match}\n${dnsResolverLines}`);
+    }
+  } else {
+    const dnsBlock = [
+      'dns:',
+      '  enable: true',
+      dnsResolverLines,
+      '',
+    ].join('\n');
+    yaml = dnsBlock + yaml;
+  }
+
+  return yaml.endsWith('\n') ? yaml : yaml + '\n';
+}
+
 function buildClashJsonProfile(nodes) {
   // 旧兼容辅助函数：保留供必要时诊断。
   const parsed = uniqueParsedNodes(nodes).filter(p => p.network === 'ws');
@@ -775,7 +812,7 @@ function buildClashJsonProfile(nodes) {
 }
 
 function buildClashYaml(nodes) {
-  // V6.17 本地 Clash 输出直接内置项目1同款 ACL4SSR Mini MultiMode 代理组与分流。
+  // V6.19 本地 Clash 输出直接内置项目1同款 ACL4SSR Mini MultiMode 代理组与分流，并补 OpenClash 启动 DNS。
   // 这样即使外部 SubAPI 不可用，也不会退回只有 PROXY + MATCH 的简化配置。
   // XHTTP 在旧内核兼容性差，Clash 兼容订阅仍只输出 WS；Base64/其它客户端保持原始节点。
   const parsed = uniqueParsedNodes(nodes).filter(p => p.network === 'ws');
@@ -805,7 +842,7 @@ function buildClashYaml(nodes) {
     if (p.tls) {
       if (p.type === 'vless') lines.push(`    sni: ${yamlQuote(p.sni || p.server)}`);
       lines.push(`    servername: ${yamlQuote(p.sni || p.server)}`);
-      lines.push(`    client-fingerprint: ${yamlQuote(p.fp || 'chrome')}`);
+      lines.push(`    client-fingerprint: ${yamlQuote('chrome')}`);
       lines.push('    skip-cert-verify: false');
     }
     lines.push('    network: ws');
@@ -896,7 +933,7 @@ function buildClashYaml(nodes) {
   lines.push('  - RULE-SET,ChinaCompanyIp,🎯 全球直连');
   lines.push('  - GEOIP,CN,🎯 全球直连');
   lines.push('  - MATCH,🐟 漏网之鱼');
-  return lines.join('\n') + '\n';
+  return normalizeClashForOpenClash(lines.join('\n') + '\n');
 }
 
 function buildSingBoxJson(nodes) {
@@ -1137,22 +1174,20 @@ async function rewriteUriNode(node, source, centralHost, env = {}) {
     a: originalEndpoint,
   }, env);
 
-  // V6.17：源节点进入中控 Relay 时，客户端连接入口必须明确指向当前中控 Worker。
-  // 旧版保留源节点原始 server:port，仅改 Host/SNI/Path；这要求原 server 恰好也是
-  // 能承载 centralHost 的 Cloudflare 边缘入口，因此会出现“部分项目能用、部分项目无网络”。
-  // 原始 server:port 已写入 relayToken 的 a 字段用于区分节点，所以这里改成 centralHost
-  // 不会导致不同源节点被错误合并；ADD 仍会在 cloneAddNode() 中覆盖为用户指定优选入口。
-  const relayPort = originalSecurity === 'none' ? '80' : '443';
+  // V6.18：客户端第一跳必须明确进入“当前中控”。
+  // V6.16 保留源节点原始 server:port，会导致代码覆盖到另一个中控项目后，
+  // 客户端仍先连接旧入口，再用新中控的 SNI/Host；旧入口不一定能承载新域名，
+  // 于是出现“源项目诊断全绿，但客户端节点没网络”。
+  // 原 server:port 已写入 Relay token 的 a 字段，仍可保持不同源节点的身份唯一。
   u.hostname = centralHost;
-  u.port = relayPort;
-
   if (originalSecurity === 'none') {
+    u.port = '80';
     u.searchParams.set('security', 'none');
-    u.searchParams.delete('sni');
   } else {
+    u.port = '443';
     u.searchParams.set('security', 'tls');
-    u.searchParams.set('sni', centralHost);
   }
+  u.searchParams.set('sni', centralHost);
   u.searchParams.set('host', centralHost);
   u.searchParams.set('path', `/relay/${relayToken}`);
   u.searchParams.delete('ech');
@@ -1184,13 +1219,13 @@ async function rewriteVmessNode(node, source, centralHost, env = {}) {
     a: originalEndpoint,
   }, env);
 
-  // V6.17：VMess 与 VLESS/Trojan 一样，客户端必须先明确连接当前中控 Worker，
-  // 再由 /relay/ 转发到源项目，不能继续保留源节点原始 add/port 作为客户端入口。
-  const relayTls = String(obj.tls || '').toLowerCase() === 'tls';
+  // V6.18：VMess 同样让客户端第一跳直接进入当前中控；
+  // 原 add/port 仍保留在 Relay token 中用于区分节点。
+  const isTls = String(obj.tls || '').toLowerCase() === 'tls';
   obj.add = centralHost;
-  obj.port = relayTls ? '443' : '80';
+  obj.port = isTls ? '443' : '80';
   obj.host = centralHost;
-  obj.sni = relayTls ? centralHost : '';
+  obj.sni = centralHost;
   obj.path = `/relay/${relayToken}`;
   if (obj.ech) delete obj.ech;
   return `vmess://${utf8ToBase64(JSON.stringify(obj))}`;
@@ -1480,6 +1515,24 @@ async function handleDiagnose(request, env = {}) {
   const expiry = getExpiryState(env.EXPIRY_DATE);
   const startedAt = Date.now();
 
+  // V6.19：继续展示 Clash 二次回源时实际携带的运营商，
+  // 方便确认“客户端首次识别 -> SubAPI merge-source -> 项目2”三段是否一致。
+  const detectedIsp = normalizeIsp(url.searchParams.get('isp')) || detectIspFromCf(request?.cf || {});
+  let clashRelayIsp = '';
+  try {
+    const subscriptionUrl = new URL(url.toString());
+    subscriptionUrl.pathname = `/${accessKey}`;
+    subscriptionUrl.searchParams.delete('json');
+    subscriptionUrl.searchParams.set('clash', '');
+    const converterUrl = buildProject1ConverterUrl('clash', subscriptionUrl, request, env);
+    if (converterUrl) {
+      const converter = new URL(converterUrl);
+      const relaySource = new URL(converter.searchParams.get('url') || '');
+      clashRelayIsp = normalizeIsp(relaySource.searchParams.get('isp'));
+    }
+  } catch {}
+  const project2Isp = detectedIsp;
+
   const results = [];
   for (let index = 0; index < CONFIG.SOURCES.length; index++) {
     results.push(await probeSourceWebSocket(CONFIG.SOURCES[index], index, request));
@@ -1493,6 +1546,9 @@ async function handleDiagnose(request, env = {}) {
     workerToWorkerHint: '如果 WS 探测出现 1042、目标 Worker 未命中或 response.webSocket=false，而源项目使用 Workers Route/workers.dev，请在中控 Worker 增加 compatibility flag: global_fetch_strictly_public。',
     subscriptionPath: `/${accessKey}`,
     expiry,
+    detectedIsp,
+    clashRelayIsp,
+    project2Isp,
     sources: results,
   };
 
@@ -1808,7 +1864,7 @@ function renderDiagnoseHtml(report) {
 
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>中控连接诊断</title>
   <style>body{margin:0;background:#f4f7f9;color:#222;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans SC",sans-serif}.wrap{max-width:980px;margin:auto;padding:22px}.top,.diag-card{background:#fff;border:1px solid #e5e7eb;border-radius:16px;box-shadow:0 4px 12px rgba(0,0,0,.06)}.top{padding:20px;margin-bottom:18px}.top h1{font-size:24px;margin:0 0 8px}.top p{margin:5px 0;color:#667085}.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.diag-card{padding:18px}.diag-card h2{font-size:18px;margin:0 0 12px}.diag-row{display:flex;justify-content:space-between;gap:16px;padding:9px 0;border-bottom:1px solid #eef2f6}.diag-row span{color:#667085}.diag-row b{text-align:right;word-break:break-all}.ok{color:#067647}.bad{color:#b42318}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}.diag-msg{margin-top:12px;padding:11px;border-radius:10px;white-space:pre-wrap;word-break:break-word}.badbox{background:#fef3f2;color:#b42318}.hint{background:#eff8ff;color:#175cd3}.flag{margin-top:12px;background:#fff7ed;color:#9a3412;padding:12px;border-radius:10px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-word}@media(max-width:760px){.grid{grid-template-columns:1fr}.wrap{padding:12px}.diag-row{flex-direction:column;gap:2px}.diag-row b{text-align:left}}</style></head><body><div class="wrap">
-  <div class="top"><h1>中控连接诊断</h1><p>${escapeHtml(report.compatibilityDateNote)}</p><p>这个页面会从中控 Worker 发起源订阅读取、WebSocket 握手，并对 VLESS 候选发送真实首包，区分“只握手成功”和“实际数据可通”。</p><div class="flag">${escapeHtml(report.workerToWorkerHint)}</div></div>
+  <div class="top"><h1>中控连接诊断</h1><p>${escapeHtml(report.compatibilityDateNote)}</p><p>这个页面会从中控 Worker 发起源订阅读取、WebSocket 握手，并对 VLESS 候选发送真实首包，区分“只握手成功”和“实际数据可通”。</p><div class="diag-row"><span>当前识别运营商</span><b>${escapeHtml(report.detectedIsp || '未识别')}</b></div><div class="diag-row"><span>Clash回源运营商</span><b>${escapeHtml(report.clashRelayIsp || '未锁定')}</b></div><div class="diag-row"><span>项目2运营商</span><b>${escapeHtml(report.project2Isp || '未识别')}</b></div><div class="flag">${escapeHtml(report.workerToWorkerHint)}</div></div>
   <div class="grid">${rows || '<div class="diag-card">没有配置源项目</div>'}</div>
   </div></body></html>`;
 }
