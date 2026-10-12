@@ -5,7 +5,7 @@ export const CONFIG = {
     {
       name: '项目1',
       type: 'code1',
-      url: '', // 例如：https://a.example.com/你的UUID
+      url: 'https://cslao.jsqka.com/cslaos', // 例如：https://a.example.com/你的UUID
       enabled: true,
     },
     {
