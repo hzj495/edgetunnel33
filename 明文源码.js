@@ -1,17 +1,25 @@
 
-
 export const CONFIG = {
+  // ===== 只需在下面两对单引号内填写一次 =====
+  // 管理站完整接口地址，例如：https://你的管理站域名/api/config
+  SOURCE_CONFIG_URL: 'https://url.jsqka.com/api/config',
+  // 填写管理站 READ_TOKEN 的值，不是 ADMIN_PASSWORD，也不是 CF API Token。
+  SOURCE_CONFIG_TOKEN: 'ucdjn27rncdi9kjif028cdj4nEucdnew',
+  // 这两项只从本代码读取，不再读取同名 Cloudflare 环境变量。
+  // 两项未填完整时会明确报错；以后更换项目1/项目2的URL，去独立管理站修改即可。
+
+
   SOURCES: [
     {
       name: '项目1',
       type: 'code1',
-      url: 'https://cslao.jsqka.com/cslaos', // 例如：https://a.example.com/你的UUID
+      url: '', // 例如：https://a.example.com/你的UUID
       enabled: true,
     },
     {
       name: '项目2',
       type: 'code2',
-      url: 'https://css.junkayk.com/1c6a16fc-a078-4aed-a464-b41e6e4e7851', // 例如：https://b.example.com/你的UUID
+      url: '', // 例如：https://b.example.com/你的UUID
       enabled: true,
     },
   ],
@@ -54,7 +62,7 @@ export default {
 
       // 所有节点实际使用时都会访问 /relay/...，因此到期后旧节点也会在这里被拦截。
       if (path.startsWith('/relay/')) {
-        return handleRelay(request, url, env);
+        return await handleRelay(request, url, env);
       }
 
       const keyPath = `/${accessKey}`;
@@ -62,6 +70,12 @@ export default {
       const diagnosePath = `${keyPath}/diagnose`;
       const mergeSourcePath = `${keyPath}/merge-source`;
       const convertTestPath = `${keyPath}/convert-test`;
+
+      // 只为有效业务路径加载远程配置；普通H5页面由status请求读取状态。
+      if ([mergeSourcePath, statusPath, convertTestPath, diagnosePath].includes(path) ||
+          (path === keyPath && !shouldShowH5(request, url))) {
+        env = await withSourceConfig(env);
+      }
 
       // V6.5：专供项目1原版 SubAPI 读取的内部 Base64 合并源。
       // 与 cs(4).txt 的 /fakeUserID/merge-code2 作用一致，避免转换器再次触发 Clash/SingBox/Loon 格式分支。
@@ -99,20 +113,107 @@ export default {
 
       return text('不用怀疑！你的地址输入错误！！！', 404, { 'Cache-Control': 'no-store' });
     } catch (error) {
-      return text(`Internal Error: ${error?.message || error}`, 500, { 'Cache-Control': 'no-store' });
+      return text(`Internal Error: ${error?.message || error}`, error?.status === 503 ? 503 : 500, { 'Cache-Control': 'no-store' });
     }
   },
 };
+
+// V6.16-RC1：独立管理站配置。仅在请求副本中传递，不改写全局 CONFIG。
+const REMOTE_SOURCES = Symbol('remoteSources');
+const REMOTE_INFO = Symbol('remoteInfo');
+const remoteSourceCache = new Map();
+function sourceList(env = {}) { return env[REMOTE_SOURCES] || CONFIG.SOURCES; }
+function configUnavailable(message) { const e = new Error(message); e.status = 503; return e; }
+function validateRemoteSources(data) {
+  if (!data || data.schemaVersion !== 1 || !Number.isSafeInteger(data.version) || data.version < 1 || !Array.isArray(data.sources) || data.sources.length !== 2) {
+    throw configUnavailable('管理站返回的配置格式不正确。');
+  }
+  return data.sources.map((s, i) => {
+    if (!s || s.type !== `code${i + 1}` || typeof s.url !== 'string' || typeof s.enabled !== 'boolean') throw configUnavailable('管理站项目配置格式不正确。');
+    const raw = s.url.trim();
+    if (s.enabled && !raw) throw configUnavailable(`管理站项目${i + 1}已启用但未填写 URL。`);
+    if (raw) {
+      let u; try { u = new URL(raw); } catch { throw configUnavailable('管理站项目 URL 无效。'); }
+      if (!['http:', 'https:'].includes(u.protocol) || u.username || u.password || raw.includes('#') || /[\s\\\u0000-\u001f\u007f]/.test(raw) || raw.length > 4096) throw configUnavailable('管理站项目 URL 无效。');
+    }
+    return { name: `项目${i + 1}`, type: `code${i + 1}`, url: raw, enabled: s.enabled };
+  });
+}
+async function withSourceConfig(env = {}) {
+  if (env[REMOTE_SOURCES]) return env;
+  const endpoint = String(CONFIG.SOURCE_CONFIG_URL || '').trim();
+  const token = String(CONFIG.SOURCE_CONFIG_TOKEN || '').trim();
+  if (!endpoint || !token) throw configUnavailable('请在代码顶部 CONFIG 中填写 SOURCE_CONFIG_URL 和 SOURCE_CONFIG_TOKEN。');
+  let u; try { u = new URL(endpoint); } catch { throw configUnavailable('SOURCE_CONFIG_URL 格式不正确。'); }
+  if (u.protocol !== 'https:' || u.username || u.password || u.hash || /[\s\\]/.test(endpoint)) throw configUnavailable('SOURCE_CONFIG_URL 必须是无账号密码、无片段的 HTTPS 接口地址。');
+  const rawTtl = env.SOURCE_CONFIG_CACHE_SECONDS;
+  const ttl = rawTtl === undefined || rawTtl === '' ? 30 : Number(rawTtl);
+  if (!Number.isInteger(ttl) || ttl < 0 || ttl > 300) throw configUnavailable('SOURCE_CONFIG_CACHE_SECONDS 必须是 0 到 300 的整数。');
+  // 仅驻留 isolate 内存；不写日志、不存共享边缘缓存。不同接口/密钥独立隔离。
+  const cacheKey = JSON.stringify([endpoint, token, ttl]);
+  let entry = remoteSourceCache.get(cacheKey);
+  if (!entry || Date.now() >= entry.expiresAt) {
+    if (!entry?.pending) {
+      entry = { expiresAt: 0, pending: null };
+      remoteSourceCache.set(cacheKey, entry);
+      // 限制多个配置组合的内存占用。
+      if (remoteSourceCache.size > 32) remoteSourceCache.delete(remoteSourceCache.keys().next().value);
+      const current = entry;
+      current.pending = (async () => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 5000);
+        try {
+          const response = await fetch(endpoint, {
+            method: 'GET', redirect: 'manual', signal: controller.signal,
+            headers: { Authorization: `Bearer ${token}`, Accept: 'application/json', 'Cache-Control': 'no-cache' },
+            cf: { cacheTtl: 0, cacheEverything: false },
+          });
+          // Workers 不支持 redirect: 'error'；手动拒绝跳转，避免向跳转目标发送读取密钥。
+          if (response.status >= 300 && response.status < 400) {
+            await response.body?.cancel();
+            throw configUnavailable(`管理站接口发生跳转（HTTP ${response.status}），请将 SOURCE_CONFIG_URL 填为最终的 HTTPS /api/config 地址。`);
+          }
+          if (!response.ok) {
+            await response.body?.cancel();
+            throw configUnavailable(`读取管理站配置失败（HTTP ${response.status}），请检查接口和读取密钥。`);
+          }
+          // 限制异常响应体；超时覆盖读取响应体的全过程。
+          const reader = response.body?.getReader();
+          if (!reader) throw configUnavailable('管理站返回空配置。');
+          const decoder = new TextDecoder(); let textBody = '', size = 0;
+          while (true) {
+            const part = await reader.read(); if (part.done) break;
+            size += part.value.byteLength;
+            if (size > 32768) { await reader.cancel(); throw configUnavailable('管理站返回内容过大。'); }
+            textBody += decoder.decode(part.value, { stream: true });
+          }
+          textBody += decoder.decode();
+          const data = JSON.parse(textBody);
+          current.sources = validateRemoteSources(data);
+          current.info = { mode: 'remote', version: data.version, updatedAt: data.updatedAt || '', cacheSeconds: ttl };
+          current.expiresAt = Date.now() + ttl * 1000;
+        } catch (error) {
+          remoteSourceCache.delete(cacheKey);
+          if (error?.status === 503) throw error;
+          throw configUnavailable(error?.name === 'AbortError' ? '读取管理站配置超时，请稍后重试。' : '无法读取管理站配置，请检查接口、密钥及管理站状态。');
+        } finally { clearTimeout(timer); current.pending = null; }
+      })();
+    }
+    await entry.pending;
+  }
+  return { ...env, [REMOTE_SOURCES]: entry.sources, [REMOTE_INFO]: entry.info };
+}
 
 function normalizePath(pathname) {
   if (!pathname || pathname === '/') return '/';
   return pathname.endsWith('/') ? pathname.slice(0, -1) : pathname;
 }
 
-function configuredSources() {
+function configuredSources(env = {}) {
   const out = [];
-  for (let i = 0; i < CONFIG.SOURCES.length; i++) {
-    const s = CONFIG.SOURCES[i] || {};
+  const list = sourceList(env);
+  for (let i = 0; i < list.length; i++) {
+    const s = list[i] || {};
     if (s.enabled === false) continue;
     const raw = String(s.url || '').trim();
     if (!raw) continue;
@@ -126,9 +227,9 @@ function configuredSources() {
 }
 
 async function handleMergedSubscription(request, currentUrl, env = {}, expiry = getExpiryState(env.EXPIRY_DATE)) {
-  const sources = configuredSources();
+  const sources = configuredSources(env);
   if (!sources.length) {
-    return text('中控尚未配置源订阅 URL。请编辑代码顶部 CONFIG.SOURCES。', 503, {
+    return text('没有已启用的源订阅 URL。已接入管理站时，请登录管理站填写并启用项目；未接入时请检查本地 CONFIG.SOURCES。', 503, {
       'Cache-Control': 'no-store',
     });
   }
@@ -1218,7 +1319,8 @@ async function handleRelay(request, currentUrl, env = {}) {
   if (!payload) return text('Invalid relay token', 403);
 
   const sourceIndex = Number(payload.i);
-  const source = CONFIG.SOURCES[sourceIndex];
+  env = await withSourceConfig(env);
+  const source = sourceList(env)[sourceIndex];
   if (!source || source.enabled === false || !String(source.url || '').trim()) {
     return text('Relay source disabled', 410);
   }
@@ -1472,8 +1574,9 @@ async function handleDiagnose(request, env = {}) {
   const startedAt = Date.now();
 
   const results = [];
-  for (let index = 0; index < CONFIG.SOURCES.length; index++) {
-    results.push(await probeSourceWebSocket(CONFIG.SOURCES[index], index, request));
+  const list = sourceList(env);
+  for (let index = 0; index < list.length; index++) {
+    results.push(await probeSourceWebSocket(list[index], index, request));
   }
 
   const report = {
@@ -1805,8 +1908,8 @@ function renderDiagnoseHtml(report) {
 }
 
 async function handleStatus(request, env = {}) {
-  const sources = configuredSources();
-  const results = await Promise.all(CONFIG.SOURCES.map(async (source, index) => {
+  const sources = configuredSources(env);
+  const results = await Promise.all(sourceList(env).map(async (source, index) => {
     const raw = String(source?.url || '').trim();
     if (!raw || source?.enabled === false) {
       return { index, name: source?.name || `项目${index + 1}`, configured: !!raw, enabled: source?.enabled !== false, ok: false, count: 0, error: raw ? '已停用' : '未填写 URL' };
@@ -1831,7 +1934,7 @@ async function handleStatus(request, env = {}) {
       error: relayCount > 0 ? '' : (r.error || '没有可中控转发的节点'),
     };
   }));
-  return json({ ok: true, subscriptionPath: `/${String(env.UUID || env.uuid || '').trim()}`, sources: results, configuredCount: sources.length, addCount: parseAddEntries(env.ADD).length, expiry: getExpiryState(env.EXPIRY_DATE) });
+  return json({ ok: true, sourceConfig: env[REMOTE_INFO] || { mode: 'local' }, subscriptionPath: `/${String(env.UUID || env.uuid || '').trim()}`, sources: results, configuredCount: sources.length, addCount: parseAddEntries(env.ADD).length, expiry: getExpiryState(env.EXPIRY_DATE) });
 }
 
 async function canRewriteNode(node) {
