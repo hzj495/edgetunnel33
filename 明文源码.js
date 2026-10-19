@@ -1,13 +1,9 @@
 
 export const CONFIG = {
-  // ===== 只需在下面两对单引号内填写一次 =====
   // 管理站完整接口地址，例如：https://你的管理站域名/api/config
-  SOURCE_CONFIG_URL: 'https://url.jsqka.com/api/config',
-  // 填写管理站 READ_TOKEN 的值，不是 ADMIN_PASSWORD，也不是 CF API Token。
-  SOURCE_CONFIG_TOKEN: 'ucdjn27rncdi9kjif028cdj4nEucdnew',
-  // 这两项只从本代码读取，不再读取同名 Cloudflare 环境变量。
-  // 两项未填完整时会明确报错；以后更换项目1/项目2的URL，去独立管理站修改即可。
-
+  SOURCE_CONFIG_URL: '',
+  // 填写管理站 READ_TOKEN 的值
+  SOURCE_CONFIG_TOKEN: '',
 
   SOURCES: [
     {
@@ -33,8 +29,6 @@ export const CONFIG = {
 const SUPPORTED_URI_SCHEMES = new Set(['vless', 'trojan']);
 const SUPPORTED_TRANSPORTS = new Set(['ws', 'xhttp']);
 
-// V6.16：Clash 优先使用项目1同款订阅转换后端 + ACL4SSR 配置，
-// 从而继承项目1的代理组与分流；转换器异常时仍回退到本地标准 YAML。
 const DEFAULT_SUBAPI = 'https://SubApi.CmliUsssS.Net';
 const SUBCONFIG = 'https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/ACL4SSR_Online_Mini_MultiMode.ini';
 const SUBPROTOCOL = 'https';
@@ -102,9 +96,7 @@ export default {
       }
 
       if (path === keyPath) {
-        // 自 V6.14 起：不能只靠 Mozilla UA 判断 H5。
-        // 一些定制 Clash 前端/重试下载会使用 Chromium/Mozilla UA，但它们不是页面导航。
-        // 只有真正的浏览器 document/navigate（或明确 Accept: text/html）才显示 H5；其余按订阅处理。
+
         if (shouldShowH5(request, url)) {
           return h5Page(request, env, expiry);
         }
@@ -118,7 +110,6 @@ export default {
   },
 };
 
-// V6.16-RC1：独立管理站配置。仅在请求副本中传递，不改写全局 CONFIG。
 const REMOTE_SOURCES = Symbol('remoteSources');
 const REMOTE_INFO = Symbol('remoteInfo');
 const remoteSourceCache = new Map();
