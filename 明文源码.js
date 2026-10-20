@@ -1,9 +1,9 @@
 
 export const CONFIG = {
   // 管理站完整接口地址，例如：https://你的管理站域名/api/config
-  SOURCE_CONFIG_URL: 'https://url.jsqka.com/api/config',
+  SOURCE_CONFIG_URL: '',
   // 填写管理站 READ_TOKEN 的值
-  SOURCE_CONFIG_TOKEN: 'ucdjn27rncdi9kjif028cdj4nEucdnew',
+  SOURCE_CONFIG_TOKEN: '',
 
   SOURCES: [
     {
@@ -36,14 +36,10 @@ const SUBEMOJI = 'true';
 const SUBSCV = 'false';
 
 // ===== 统一地区锁定中心（可选） =====
-// 地区锁定是否启用，只由 DEFAULT_REGION_LOCK_API + DEFAULT_REGION_LOCK_SECRET
-// （或环境变量 REGION_LOCK_API + REGION_LOCK_SECRET）决定，和 SOURCE_CONFIG_URL/TOKEN 无关。
-// 两项都留空：完全关闭地区识别/锁定，客户端照常订阅，不调用锁定中心。
-// 两项都配置：客户端首次导入锁定“国家 + 州/省”，跨国家或跨州/省拒绝。
-// 浏览器 H5、status、diagnose、convert-test、merge-source、relay 均不会触发地区锁定。
-const DEFAULT_REGION_LOCK_API = 'https://jdsq.junkatz.com';
+
+const DEFAULT_REGION_LOCK_API = '';
 // 必须与统一锁定中心的 REGION_LOCK_SECRET 保持一致；留空即不启用地区锁定。
-const DEFAULT_REGION_LOCK_SECRET = '1c6347178d3d1cc123854d0fb257dab91eae2bd8b370c9fd3749d0b7956bf0b7';
+const DEFAULT_REGION_LOCK_SECRET = '';
 
 export default {
   async fetch(request, env = {}, ctx) {
