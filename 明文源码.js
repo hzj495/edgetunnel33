@@ -1,9 +1,9 @@
 
 export const CONFIG = {
   // 管理站完整接口地址，例如：https://你的管理站域名/api/config
-  SOURCE_CONFIG_URL: '',
+  SOURCE_CONFIG_URL: 'https://url.jsqka.com/api/config',
   // 填写管理站 READ_TOKEN 的值
-  SOURCE_CONFIG_TOKEN: '',
+  SOURCE_CONFIG_TOKEN: 'ucdjn27rncdi9kjif028cdj4nEucdnew',
 
   SOURCES: [
     {
@@ -35,6 +35,16 @@ const SUBPROTOCOL = 'https';
 const SUBEMOJI = 'true';
 const SUBSCV = 'false';
 
+// ===== 统一地区锁定中心（可选） =====
+// 地区锁定是否启用，只由 DEFAULT_REGION_LOCK_API + DEFAULT_REGION_LOCK_SECRET
+// （或环境变量 REGION_LOCK_API + REGION_LOCK_SECRET）决定，和 SOURCE_CONFIG_URL/TOKEN 无关。
+// 两项都留空：完全关闭地区识别/锁定，客户端照常订阅，不调用锁定中心。
+// 两项都配置：客户端首次导入锁定“国家 + 州/省”，跨国家或跨州/省拒绝。
+// 浏览器 H5、status、diagnose、convert-test、merge-source、relay 均不会触发地区锁定。
+const DEFAULT_REGION_LOCK_API = 'https://jdsq.junkatz.com';
+// 必须与统一锁定中心的 REGION_LOCK_SECRET 保持一致；留空即不启用地区锁定。
+const DEFAULT_REGION_LOCK_SECRET = '1c6347178d3d1cc123854d0fb257dab91eae2bd8b370c9fd3749d0b7956bf0b7';
+
 export default {
   async fetch(request, env = {}, ctx) {
     try {
@@ -64,6 +74,7 @@ export default {
       const diagnosePath = `${keyPath}/diagnose`;
       const mergeSourcePath = `${keyPath}/merge-source`;
       const convertTestPath = `${keyPath}/convert-test`;
+      const regionLockStatusPath = `${keyPath}/region-lock-status`;
 
       // 只为有效业务路径加载远程配置；普通H5页面由status请求读取状态。
       if ([mergeSourcePath, statusPath, convertTestPath, diagnosePath].includes(path) ||
@@ -91,6 +102,10 @@ export default {
         return handleConvertTest(request, env, expiry, keyPath);
       }
 
+      if (path === regionLockStatusPath) {
+        return handleRegionLockStatus(request, env, accessKey);
+      }
+
       if (path === diagnosePath) {
         return handleDiagnose(request, env);
       }
@@ -98,9 +113,37 @@ export default {
       if (path === keyPath) {
 
         if (shouldShowH5(request, url)) {
+          // 普通浏览器只显示 H5，不识别国家/州省，也不写入锁定中心。
           return h5Page(request, env, expiry);
         }
-        return handleMergedSubscription(request, url, env, expiry);
+
+        // 只有真正的公开订阅客户端拉取/更新才执行地区锁定。
+        // 内部 merge-source、status、diagnose、convert-test、relay 都不会触发。
+        const regionLock = await checkAndLockImportRegion(request, env, accessKey);
+        if (!regionLock.valid) {
+          return text(regionLock.message || '❌ 导入失败：地区锁定校验未通过。', regionLock.status || 403, {
+            'Cache-Control': 'no-store',
+            'X-Region-Lock': 'blocked',
+            'X-Region-Lock-Country': regionLock.lockedCountry || regionLock.country || '',
+            'X-Region-Lock-Region': regionLock.lockedRegionCode || regionLock.regionCode || '',
+          });
+        }
+
+        const response = await handleMergedSubscription(request, url, env, expiry);
+        try {
+          const headers = new Headers(response.headers);
+          headers.set('X-Region-Lock', regionLock.disabled ? 'disabled' : (regionLock.lockedNow ? 'locked-now' : 'allowed'));
+          if (regionLock.disabledReason) headers.set('X-Region-Lock-Reason', regionLock.disabledReason);
+          headers.set('X-Region-Lock-Country', regionLock.lockedCountry || regionLock.country || '');
+          headers.set('X-Region-Lock-Region', regionLock.lockedRegionCode || regionLock.regionCode || '');
+          return new Response(response.body, {
+            status: response.status,
+            statusText: response.statusText,
+            headers,
+          });
+        } catch {
+          return response;
+        }
       }
 
       return text('不用怀疑！你的地址输入错误！！！', 404, { 'Cache-Control': 'no-store' });
@@ -114,6 +157,17 @@ const REMOTE_SOURCES = Symbol('remoteSources');
 const REMOTE_INFO = Symbol('remoteInfo');
 const remoteSourceCache = new Map();
 function sourceList(env = {}) { return env[REMOTE_SOURCES] || CONFIG.SOURCES; }
+function sourceControlState() {
+  const endpoint = String(CONFIG.SOURCE_CONFIG_URL || '').trim();
+  const token = String(CONFIG.SOURCE_CONFIG_TOKEN || '').trim();
+  return {
+    endpoint,
+    token,
+    enabled: Boolean(endpoint && token),
+    disabled: !endpoint && !token,
+    partial: Boolean(endpoint) !== Boolean(token),
+  };
+}
 function configUnavailable(message) { const e = new Error(message); e.status = 503; return e; }
 function validateRemoteSources(data) {
   if (!data || data.schemaVersion !== 1 || !Number.isSafeInteger(data.version) || data.version < 1 || !Array.isArray(data.sources) || data.sources.length !== 2) {
@@ -132,9 +186,17 @@ function validateRemoteSources(data) {
 }
 async function withSourceConfig(env = {}) {
   if (env[REMOTE_SOURCES]) return env;
-  const endpoint = String(CONFIG.SOURCE_CONFIG_URL || '').trim();
-  const token = String(CONFIG.SOURCE_CONFIG_TOKEN || '').trim();
-  if (!endpoint || !token) throw configUnavailable('请在代码顶部 CONFIG 中填写 SOURCE_CONFIG_URL 和 SOURCE_CONFIG_TOKEN。');
+  const sourceControl = sourceControlState();
+  const endpoint = sourceControl.endpoint;
+  const token = sourceControl.token;
+  // 两项都留空时进入本地 SOURCES 模式；是否锁地区由独立的 REGION_LOCK 配置决定。
+  if (sourceControl.disabled) {
+    return { ...env, [REMOTE_INFO]: { mode: 'local' } };
+  }
+  // 只填一项属于配置错误，避免误以为已经启用远程管理。
+  if (sourceControl.partial) {
+    throw configUnavailable('SOURCE_CONFIG_URL 和 SOURCE_CONFIG_TOKEN 必须同时填写，或同时留空使用本地 SOURCES 模式。');
+  }
   let u; try { u = new URL(endpoint); } catch { throw configUnavailable('SOURCE_CONFIG_URL 格式不正确。'); }
   if (u.protocol !== 'https:' || u.username || u.password || u.hash || /[\s\\]/.test(endpoint)) throw configUnavailable('SOURCE_CONFIG_URL 必须是无账号密码、无片段的 HTTPS 接口地址。');
   const rawTtl = env.SOURCE_CONFIG_CACHE_SECONDS;
@@ -198,6 +260,357 @@ async function withSourceConfig(env = {}) {
 function normalizePath(pathname) {
   if (!pathname || pathname === '/') return '/';
   return pathname.endsWith('/') ? pathname.slice(0, -1) : pathname;
+}
+
+/**
+ * 统一地区锁定中心：
+ * - 第一次真正导入订阅时锁定“国家 + 州/省”。
+ * - 相同国家、相同州/省允许更新。
+ * - 第二个国家或第二个州/省直接拒绝。
+ * - 本 Worker 不绑定 KV / D1，记录统一保存在锁定中心。
+ * - 是否启用锁定与 SOURCE_CONFIG_URL / SOURCE_CONFIG_TOKEN 完全无关。
+ * - DEFAULT_REGION_LOCK_API + DEFAULT_REGION_LOCK_SECRET（或对应环境变量）两项都为空时自动关闭锁定。
+ * - 两项都配置时才启用国家 + 州/省锁定；只配置其中一项视为配置错误。
+ *
+ * 可选环境变量：
+ * REGION_LOCK=false              即使已配置中心也强制关闭锁定
+ * REGION_LOCK_API=https://...    覆盖 DEFAULT_REGION_LOCK_API
+ * REGION_LOCK_SECRET=...         覆盖 DEFAULT_REGION_LOCK_SECRET
+ * REGION_LOCK_ID=...             自定义项目固定身份（多域名共用时建议设置）
+ * REGION_LOCK_VERSION=1          改版本即可创建一套新的锁定记录
+ * REGION_LOCK_TIMEOUT=6000       请求锁定中心超时毫秒
+ * REGION_LOCK_FAIL_OPEN=false    锁定中心故障时是否放行；默认 false
+ */
+async function makeRegionLockHash(value) {
+  const data = new TextEncoder().encode(String(value || ''));
+  const digest = await crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(digest))
+    .map(byte => byte.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+function regionDisplayName(countryCode) {
+  try {
+    if (typeof Intl !== 'undefined' && Intl.DisplayNames) {
+      const names = new Intl.DisplayNames(['zh-CN'], { type: 'region' });
+      return names.of(countryCode) || countryCode;
+    }
+  } catch {}
+
+  const fallback = {
+    CN: '中国', HK: '中国香港', MO: '中国澳门', TW: '中国台湾',
+    US: '美国', JP: '日本', KR: '韩国', SG: '新加坡',
+    TH: '泰国', MY: '马来西亚', PH: '菲律宾', VN: '越南',
+    ID: '印度尼西亚', GB: '英国', CA: '加拿大', AU: '澳大利亚',
+    DE: '德国', FR: '法国', RU: '俄罗斯', IN: '印度', AE: '阿联酋',
+  };
+  return fallback[countryCode] || countryCode;
+}
+
+function regionLockControlState(env = {}) {
+  const apiBase = String(env.REGION_LOCK_API || DEFAULT_REGION_LOCK_API || '').trim().replace(/\/+$/, '');
+  const apiSecret = String(env.REGION_LOCK_SECRET || DEFAULT_REGION_LOCK_SECRET || '').trim();
+  return {
+    apiBase,
+    apiSecret,
+    enabled: Boolean(apiBase && apiSecret),
+    disabled: !apiBase && !apiSecret,
+    partial: Boolean(apiBase) !== Boolean(apiSecret),
+  };
+}
+
+async function checkAndLockImportRegion(request, env = {}, accessKey = '') {
+  // 用户要求：锁定中心地址和密钥都不配置时，完全跳过地区识别与锁定。
+  const lockControl = regionLockControlState(env);
+  if (lockControl.disabled) {
+    return { valid: true, disabled: true, disabledReason: 'region-lock-not-configured', lockedNow: false };
+  }
+  if (lockControl.partial) {
+    return {
+      valid: false,
+      status: 503,
+      lockedNow: false,
+      message: '❌ 导入失败：地区锁定配置不完整。\nDEFAULT_REGION_LOCK_API / DEFAULT_REGION_LOCK_SECRET（或对应环境变量）必须同时填写或同时留空。',
+    };
+  }
+
+  const enabled = String(env.REGION_LOCK ?? 'true').trim().toLowerCase();
+  if (['0', 'false', 'off', 'no', 'disable', 'disabled'].includes(enabled)) {
+    return { valid: true, disabled: true, lockedNow: false };
+  }
+
+  const country = String(request.cf?.country || '').trim().toUpperCase();
+  const countryName = regionDisplayName(country);
+  const region = String(request.cf?.region || '').trim();
+  const regionCode = String(request.cf?.regionCode || '').trim().toUpperCase();
+
+  if (!/^[A-Z]{2}$/.test(country) || ['XX', 'T1'].includes(country)) {
+    return {
+      valid: false,
+      status: 403,
+      country: country || 'UNKNOWN',
+      countryName: '无法识别',
+      region,
+      regionCode,
+      message: '❌ 导入失败：无法识别当前国家或地区。\n请关闭代理、隐私中继或异常网络后重试。',
+    };
+  }
+
+  if (!region && !regionCode) {
+    return {
+      valid: false,
+      status: 403,
+      country,
+      countryName,
+      region,
+      regionCode,
+      message: '❌ 导入失败：无法识别当前州/省信息。\n为确保地区锁定准确，请更换网络后重试。',
+    };
+  }
+
+  const apiBase = lockControl.apiBase;
+  const apiSecret = lockControl.apiSecret;
+
+  if (!apiBase || !/^https:\/\//i.test(apiBase)) {
+    return {
+      valid: false, status: 500, country, countryName, region, regionCode,
+      message: '❌ 导入失败：尚未配置统一地区锁定中心地址。',
+    };
+  }
+  if (!apiSecret) {
+    return {
+      valid: false, status: 500, country, countryName, region, regionCode,
+      message: '❌ 导入失败：统一地区锁定中心密钥为空，请联系管理员。',
+    };
+  }
+
+  const host = request.headers.get('Host') || new URL(request.url).hostname || 'unknown-host';
+  const lockVersion = String(env.REGION_LOCK_VERSION || '1').trim() || '1';
+  const stableIdentity = String(env.REGION_LOCK_ID || `${host}|${accessKey}`).trim();
+  const lockId = await makeRegionLockHash(`region-lock|${stableIdentity}`);
+
+  const payload = {
+    lockId,
+    version: lockVersion,
+    country,
+    countryName,
+    region,
+    regionCode,
+    ip: request.headers.get('CF-Connecting-IP') || '',
+    colo: request.cf?.colo || '',
+    host,
+    subscriptionName: String(CONFIG.SUBSCRIPTION_NAME || '').trim(),
+  };
+
+  const controller = new AbortController();
+  const timeoutMs = Math.max(1500, Math.min(Number(env.REGION_LOCK_TIMEOUT || 6000), 15000));
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const secretsToTry = [apiSecret];
+    if (DEFAULT_REGION_LOCK_SECRET && !secretsToTry.includes(DEFAULT_REGION_LOCK_SECRET)) {
+      secretsToTry.push(DEFAULT_REGION_LOCK_SECRET);
+    }
+
+    let response = null;
+    let raw = '';
+    let result = null;
+
+    for (let i = 0; i < secretsToTry.length; i++) {
+      response = await fetch(`${apiBase}/check`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json;charset=UTF-8',
+          'X-Region-Lock-Secret': secretsToTry[i],
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+        redirect: 'manual',
+      });
+
+      raw = await response.text();
+      result = null;
+      try { result = JSON.parse(raw); } catch {}
+      if (response.status === 401 && i + 1 < secretsToTry.length) continue;
+      break;
+    }
+
+    if (response?.status === 401) {
+      return {
+        valid: false, status: 503, country, countryName, region, regionCode,
+        message: '❌ 导入失败：统一地区锁定中心共享密钥不一致。\n请确保本项目 REGION_LOCK_SECRET 与锁定中心完全一致。',
+      };
+    }
+
+    if (response?.status === 403) {
+      return {
+        valid: false,
+        status: 403,
+        country, countryName, region, regionCode,
+        lockedCountry: result?.lockedCountry || '',
+        lockedCountryName: result?.lockedCountryName || '',
+        lockedRegion: result?.lockedRegion || '',
+        lockedRegionCode: result?.lockedRegionCode || '',
+        message: result?.message || raw || '❌ 导入失败：当前国家或州/省与首次锁定地区不一致。',
+      };
+    }
+
+    if (!response?.ok || !result || typeof result.valid !== 'boolean') {
+      console.error('[region-lock] center error:', response?.status, raw);
+      return {
+        valid: false, status: 503, country, countryName, region, regionCode,
+        message: '❌ 导入失败：统一地区锁定中心暂时不可用，请稍后重试。',
+      };
+    }
+
+    if (!result.valid) {
+      return {
+        valid: false,
+        status: result.status || 403,
+        country, countryName, region, regionCode,
+        lockedCountry: result.lockedCountry || '',
+        lockedCountryName: result.lockedCountryName || '',
+        lockedRegion: result.lockedRegion || '',
+        lockedRegionCode: result.lockedRegionCode || '',
+        message: result.message || '❌ 导入失败：地区锁定校验未通过。',
+      };
+    }
+
+    return {
+      valid: true,
+      status: 200,
+      country: result.country || country,
+      countryName: result.countryName || countryName,
+      region: result.region || region,
+      regionCode: result.regionCode || regionCode,
+      lockedCountry: result.lockedCountry || result.country || country,
+      lockedCountryName: result.lockedCountryName || result.countryName || countryName,
+      lockedRegion: result.lockedRegion || result.region || region,
+      lockedRegionCode: result.lockedRegionCode || result.regionCode || regionCode,
+      lockedNow: Boolean(result.lockedNow),
+      lockId,
+    };
+  } catch (error) {
+    console.error('[region-lock] center request failed:', error);
+    const failOpen = String(env.REGION_LOCK_FAIL_OPEN || 'false').trim().toLowerCase();
+    if (['1', 'true', 'on', 'yes'].includes(failOpen)) {
+      return { valid: true, bypassed: true, country, countryName, region, regionCode, lockedNow: false };
+    }
+    return {
+      valid: false, status: 503, country, countryName, region, regionCode,
+      message: '❌ 导入失败：无法连接统一地区锁定中心，请稍后重试。',
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function handleRegionLockStatus(request, env = {}, accessKey = '') {
+  // 仅检查锁定中心配置/连通性和密钥，不读取浏览器国家/州省/IP，也不写入 D1。
+  const sourceControl = sourceControlState();
+  const lockControl = regionLockControlState(env);
+  const apiBase = lockControl.apiBase;
+  const configuredSecret = lockControl.apiSecret;
+  const host = request.headers.get('Host') || new URL(request.url).hostname || '';
+
+  const report = {
+    ok: false,
+    project: {
+      host,
+      accessKeyConfigured: Boolean(accessKey),
+      subscriptionName: String(CONFIG.SUBSCRIPTION_NAME || '').trim(),
+    },
+    browserLocationDetection: false,
+    sourceControl: {
+      enabled: sourceControl.enabled,
+      disabled: sourceControl.disabled,
+      partial: sourceControl.partial,
+      mode: sourceControl.enabled ? 'remote' : (sourceControl.disabled ? 'local' : 'invalid'),
+    },
+    regionLock: {
+      enabled: lockControl.enabled,
+      disabled: lockControl.disabled,
+      partial: lockControl.partial,
+    },
+    lockCenter: {
+      apiBase,
+      reachable: false,
+      httpStatus: 0,
+      databaseHealth: '',
+      secretConfigured: Boolean(configuredSecret),
+      secretMatched: false,
+      authCheck: '',
+    },
+    note: lockControl.enabled
+      ? '地区锁定已启用：只有客户端真正拉取订阅时才识别并锁定国家 + 州/省；浏览器访问不会识别位置或生成记录。'
+      : (lockControl.disabled
+          ? 'DEFAULT_REGION_LOCK_API 和 DEFAULT_REGION_LOCK_SECRET 均未配置：地区锁定已关闭，客户端正常订阅且不会识别地区。'
+          : '地区锁定配置不完整：API 地址和共享密钥必须同时填写或同时留空。'),
+  };
+
+  if (lockControl.disabled) {
+    report.ok = true;
+    report.lockCenter.authCheck = '未配置锁定中心，地区锁定已关闭。';
+    return json(report, 200);
+  }
+  if (lockControl.partial) {
+    report.lockCenter.authCheck = '地区锁定配置不完整：API 地址和共享密钥必须同时填写。';
+    return json(report, 503);
+  }
+
+  if (!/^https:\/\//i.test(apiBase)) {
+    report.lockCenter.authCheck = '锁定中心地址必须是 HTTPS';
+    return json(report, 503);
+  }
+
+  try {
+    const healthResp = await fetch(`${apiBase}/health`, {
+      method: 'GET',
+      headers: { 'Accept': 'application/json,text/plain,*/*' },
+      redirect: 'manual',
+    });
+    report.lockCenter.reachable = healthResp.ok;
+    report.lockCenter.httpStatus = healthResp.status;
+    report.lockCenter.databaseHealth = (await healthResp.text()).slice(0, 1000);
+  } catch (error) {
+    report.lockCenter.authCheck = `无法连接锁定中心：${error?.message || error}`;
+    return json(report, 503);
+  }
+
+  try {
+    const resp = await fetch(`${apiBase}/check`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json;charset=UTF-8',
+        'X-Region-Lock-Secret': configuredSecret,
+      },
+      body: JSON.stringify({
+        lockId: 'auth-test-no-write',
+        version: '1',
+        country: 'US',
+        countryName: '美国',
+        region: 'Washington',
+        regionCode: 'WA',
+      }),
+      redirect: 'manual',
+    });
+    const body = await resp.text();
+    if (resp.status === 400 && /lockId/i.test(body)) {
+      report.lockCenter.secretMatched = true;
+      report.lockCenter.authCheck = '鉴权正常（无写入测试）';
+      report.ok = report.lockCenter.reachable;
+      return json(report, report.ok ? 200 : 503);
+    }
+    if (resp.status === 401) {
+      report.lockCenter.authCheck = '共享密钥不一致';
+      return json(report, 503);
+    }
+    report.lockCenter.authCheck = `鉴权测试返回 HTTP ${resp.status}: ${body.slice(0, 300)}`;
+  } catch (error) {
+    report.lockCenter.authCheck = `鉴权测试失败：${error?.message || error}`;
+  }
+
+  return json(report, 503);
 }
 
 function configuredSources(env = {}) {
